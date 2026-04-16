@@ -279,12 +279,10 @@ df_detail_log.to_csv("pddikti_detail_prodi_log.csv", index=False, encoding="utf-
 print("Preview df_all:")
 print(df_all.head(3))
 
-print("
-Preview df_detail:")
+print("Preview df_detail:")
 print(df_detail.head(3))
 
-print("
-Preview df_detail_log:")
+print("Preview df_detail_log:")
 print(df_detail_log.head(3))
 
 df_all.to_excel("pddikti_all_pt_raw.xlsx", index=False)
