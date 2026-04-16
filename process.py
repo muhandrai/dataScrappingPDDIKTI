@@ -2,8 +2,13 @@ import time
 import requests
 import pandas as pd
 import re
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-VERBOSE = False
+# Pengaturan Performa
+MAX_WORKERS = 10  # Jumlah thread (halaman yang ditarik sekaligus)
+TIMEOUT_SECONDS = 10
+VERBOSE = True
 
 def log(*args, **kwargs):
     if VERBOSE:
@@ -13,41 +18,49 @@ BASE_URL = "https://api-pddikti.kemdiktisaintek.go.id/v2/pt/search/filter"
 
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Origin": "https://pddikti.kemdiktisaintek.go.id",
     "Referer": "https://pddikti.kemdiktisaintek.go.id/",
 }
 
-DEFAULT_SEMESTERS = ["20261", "20252" ,"20251", "20242", "20241"]
-
-# =========================
-# LIST PROVINSI PILIHAN
-# =========================
 provinsi_list = [
-    # "Prov. Aceh",
-    # "Prov. Sumatera Utara",
-    # "Prov. Sumatera Barat",
-    # "Prov. Riau",
-    # "Prov. Jambi",
-    # "Prov. Sumatera Selatan",
-    # "Prov. Bengkulu",
-    # "Prov. Lampung",
-    # "Prov. Kepulauan Bangka Belitung",
-    # "Prov. Kepulauan Riau",
-    # "Prov. Banten",
-    # "Prov. Jawa Barat",
-    # "Prov. Jawa Tengah",
+    # --- PULAU SUMATERA ---
+    "Prov. Aceh",
+    "Prov. Sumatera Utara",
+    "Prov. Sumatera Barat",
+    "Prov. Riau",
+    "Prov. Kepulauan Riau",
+    "Prov. Jambi",
+    "Prov. Sumatera Selatan",
+    "Prov. Kepulauan Bangka Belitung",
+    "Prov. Bengkulu",
+    "Prov. Lampung",
+
+    # --- PULAU JAWA ---
+    "Prov. Banten",
+    "Prov. Jawa Barat",
+    "Prov. Jawa Tengah",
     "Prov. D.I. Yogyakarta",
+    "Prov. Jawa Timur"
 ]
 
 def safe_filename(text: str) -> str:
-    text = text.strip().lower()
-    text = text.replace("prov. ", "")
-    text = text.replace(" ", "_")
-    text = re.sub(r"[^a-z0-9_\.]", "", text)
-    return text
+    text = text.strip().lower().replace("prov. ", "").replace(" ", "_")
+    return re.sub(r"[^a-z0-9_\.]", "", text)
 
-def fetch_page(session, page=1, provinsi="", retries=3, sleep_retry=3):
+def check_api_status(session) -> bool:
+    print("⚡ Mengecek kesehatan API...")
+    try:
+        r = session.get(BASE_URL, headers=HEADERS, params={"page": 1}, timeout=5)
+        if r.status_code == 200:
+            print("✅ API Aktif. Memulai akselerasi...\n")
+            return True
+        return False
+    except:
+        return False
+
+def fetch_page_worker(page, provinsi, session):
+    """Fungsi pekerja untuk mengambil satu halaman spesifik."""
     params = {
         "page": page,
         "akreditasi": "",
@@ -55,238 +68,78 @@ def fetch_page(session, page=1, provinsi="", retries=3, sleep_retry=3):
         "provinsi": provinsi,
         "status": "",
     }
-
-    for attempt in range(1, retries + 1):
+    
+    # Retry loop lokal untuk tiap worker
+    for attempt in range(1, 4):
         try:
-            r = session.get(BASE_URL, headers=HEADERS, params=params, timeout=60)
-            log(f"provinsi={provinsi} | page={page} | attempt={attempt} | status={r.status_code}")
-            log(r.url)
-
+            r = session.get(BASE_URL, headers=HEADERS, params=params, timeout=TIMEOUT_SECONDS)
             if r.status_code == 200:
-                return r.json()
+                data = r.json().get("data") or []
+                return data
+            elif r.status_code == 429: # Rate limited
+                time.sleep(2 * attempt)
+        except Exception:
+            pass
+    return []
 
-            log("response:", r.text[:500])
-
-        except Exception as e:
-            log(f"provinsi={provinsi} | page={page} | attempt={attempt} | error={e}")
-
-        time.sleep(sleep_retry)
-
-    return None
-
-def scrape_province_raw_full(provinsi):
-    session = requests.Session()
+def scrape_province_fast(session, provinsi):
+    # 1. Ambil info awal (Total Halaman)
+    first_payload = fetch_page_worker(1, provinsi, session)
+    
+    # Hitung total halaman dari request manual pertama
+    # Kita perlu hit halaman 1 sekali lagi untuk dapat totalPages
+    r_init = session.get(BASE_URL, headers=HEADERS, params={"page": 1, "provinsi": provinsi}, timeout=TIMEOUT_SECONDS)
+    meta = r_init.json()
+    total_pages = meta.get("totalPages", 0)
+    total_items = meta.get("totalItems", 0)
+    
+    print(f"🚀 {provinsi}: Menarik {total_items} data dari {total_pages} halaman secara paralel...")
+    
     all_rows = []
+    all_rows.extend(first_payload)
 
-    first_payload = fetch_page(session=session, page=1, provinsi=provinsi)
+    # 2. Tarik sisa halaman secara paralel (Multithreading)
+    if total_pages > 1:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Daftarkan semua tugas dari halaman 2 ke atas
+            future_to_page = {executor.submit(fetch_page_worker, p, provinsi, session): p for p in range(2, total_pages + 1)}
+            
+            for future in as_completed(future_to_page):
+                page_num = future_to_page[future]
+                try:
+                    data = future.result()
+                    all_rows.extend(data)
+                    if VERBOSE:
+                        print(f"  ∟ Halaman {page_num} selesai ditarik.")
+                except Exception as e:
+                    print(f"  ❌ Halaman {page_num} gagal total: {e}")
 
-    if first_payload is None:
-        print(f"Gagal ambil page pertama untuk {provinsi}")
-        return pd.DataFrame()
+    return pd.DataFrame(all_rows)
 
-    total_pages = first_payload.get("totalPages", 0)
-    total_items = first_payload.get("totalItems", 0)
-    limit = first_payload.get("limit", None)
-    first_items = first_payload.get("data") or []
+if __name__ == "__main__":
+    main_session = requests.Session()
+    # Mengatur adapter untuk koneksi pool yang lebih besar
+    adapter = requests.adapters.HTTPAdapter(pool_connections=MAX_WORKERS, pool_maxsize=MAX_WORKERS)
+    main_session.mount('https://', adapter)
 
-    print(f"{provinsi}: {total_items} item, {total_pages} page")
+    if not check_api_status(main_session):
+        print("❌ API tidak merespons. Coba lagi nanti.")
+        sys.exit()
 
-    all_rows.extend(first_items)
+    gabungan_list = []
+    for prov in provinsi_list:
+        start_time = time.time()
+        df_prov = scrape_province_fast(main_session, prov)
+        
+        if not df_prov.empty:
+            duration = time.time() - start_time
+            print(f"✨ Selesai dalam {duration:.2f} detik.")
+            
+            gabungan_list.append(df_prov)
+            df_prov.to_csv(f"pddikti_{safe_filename(prov)}_raw.csv", index=False, encoding="utf-8-sig")
 
-    for page in range(2, total_pages + 1):
-        payload = fetch_page(session=session, page=page, provinsi=provinsi)
-
-        if payload is None:
-            print(f"Stop: gagal ambil payload di {provinsi} page {page}")
-            break
-
-        items = payload.get("data") or []
-        log(f"Jumlah item page {page}: {len(items)}")
-
-        all_rows.extend(items)
-        time.sleep(1)
-
-    df = pd.DataFrame(all_rows)
-    return df
-
-# =========================
-# TAHAP 1: SCRAPE DF_ALL
-# =========================
-hasil_per_provinsi = {}
-gabungan_list = []
-
-for provinsi in provinsi_list:
-    print(f"Mulai scraping: {provinsi}")
-
-    df_prov = scrape_province_raw_full(provinsi)
-
-    hasil_per_provinsi[provinsi] = df_prov
-    gabungan_list.append(df_prov)
-
-    filename = f"pddikti_{safe_filename(provinsi)}_raw.csv"
-    df_prov.to_csv(filename, index=False, encoding="utf-8-sig")
-    print(f"Selesai {provinsi}: {len(df_prov)} baris -> {filename}")
-
-if gabungan_list:
-    df_all = pd.concat(gabungan_list, ignore_index=True)
-else:
-    df_all = pd.DataFrame()
-
-print("\nSELESAI TAHAP 1")
-print("Jumlah baris df_all:", len(df_all))
-print("Kolom df_all:", df_all.columns.tolist())
-
-# optional simpan gabungan
-df_all.to_csv("pddikti_all_pt_raw.csv", index=False, encoding="utf-8-sig")
-
-
-# =========================
-# TAHAP 2: AMBIL DETAIL PRODI DARI DF_ALL
-# =========================
-def fetch_prodi_pt_first_valid_semester(
-    id_sp: str,
-    semesters=None,
-    session=None,
-    timeout=60,
-    sleep_each_try=1,
-):
-    if semesters is None:
-        semesters = DEFAULT_SEMESTERS
-
-    sess = session or requests.Session()
-
-    for semester in semesters:
-        url = f"https://api-pddikti.kemdiktisaintek.go.id/pt/prodi/{id_sp}/{semester}"
-
-        headers = HEADERS.copy()
-        headers["Referer"] = f"https://pddikti.kemdiktisaintek.go.id/detail-pt/{id_sp}"
-
-        try:
-            r = sess.get(url, headers=headers, timeout=timeout)
-            log(f"id_sp={id_sp} | semester={semester} | status={r.status_code}")
-
-            if r.status_code != 200:
-                time.sleep(sleep_each_try)
-                continue
-
-            data = r.json()
-
-            if not isinstance(data, list) or len(data) == 0:
-                log(f"  -> semester {semester} kosong")
-                time.sleep(sleep_each_try)
-                continue
-
-            df = pd.DataFrame(data)
-            df["id_sp"] = id_sp
-            df["semester"] = semester
-            df["detail_url"] = f"https://pddikti.kemdiktisaintek.go.id/detail-pt/{id_sp}"
-
-            log(f"  -> pakai semester {semester}, jumlah prodi: {len(df)}")
-            return df, semester
-
-        except Exception as e:
-            log(f"id_sp={id_sp} | semester={semester} | error={e}")
-            time.sleep(sleep_each_try)
-
-    return pd.DataFrame(), None
-
-
-def build_df_detail_from_df_all(
-    df_all: pd.DataFrame,
-    semesters=None,
-    sleep_each_pt=1,
-    id_col="id_sp",
-    nama_col="nama_pt",
-):
-    if df_all.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
-    # hanya ambil kolom yang diperlukan dari df_all
-    df_source = df_all[[id_col, nama_col]].copy()
-    df_source = df_source.dropna(subset=[id_col]).drop_duplicates()
-
-    session = requests.Session()
-    detail_list = []
-    log_list = []
-
-    total = len(df_source)
-
-    for i, row in enumerate(df_source.itertuples(index=False), start=1):
-        id_sp = getattr(row, id_col)
-        nama_pt = getattr(row, nama_col)
-
-        if i % 25 == 0 or i == 1 or i == total:
-            print(f"Progress detail: {i}/{total} | {nama_pt}")
-
-        df_one, semester_valid = fetch_prodi_pt_first_valid_semester(
-            id_sp=id_sp,
-            semesters=semesters,
-            session=session,
-            sleep_each_try=1,
-        )
-
-        if not df_one.empty:
-            # tambahkan nama_pt dari df_all
-            df_one[nama_col] = nama_pt
-
-            # susun kolom supaya id_sp, nama_pt di depan
-            front_cols = [id_col, nama_col, "semester", "detail_url"]
-            other_cols = [c for c in df_one.columns if c not in front_cols]
-            df_one = df_one[front_cols + other_cols]
-
-            detail_list.append(df_one)
-
-        log_list.append({
-            id_col: id_sp,
-            nama_col: nama_pt,
-            "semester_valid": semester_valid,
-            "jumlah_prodi": len(df_one) if not df_one.empty else 0,
-            "status_detail": "OK" if not df_one.empty else "KOSONG/GAGAL",
-        })
-
-        time.sleep(sleep_each_pt)
-
-    if detail_list:
-        df_detail = pd.concat(detail_list, ignore_index=True)
-    else:
-        df_detail = pd.DataFrame()
-
-    df_log = pd.DataFrame(log_list)
-
-    return df_detail, df_log
-
-
-# =========================
-# JALANKAN TAHAP 2
-# =========================
-df_detail, df_detail_log = build_df_detail_from_df_all(
-    df_all=df_all,
-    semesters=DEFAULT_SEMESTERS,   # bisa ganti kalau perlu
-    sleep_each_pt=1,
-    id_col="id_sp",
-    nama_col="nama_pt",
-)
-
-print("\nSELESAI TAHAP 2")
-print("Jumlah baris df_detail:", len(df_detail))
-print("Jumlah baris df_detail_log:", len(df_detail_log))
-
-# simpan hasil
-df_detail.to_csv("pddikti_detail_prodi.csv", index=False, encoding="utf-8-sig")
-df_detail_log.to_csv("pddikti_detail_prodi_log.csv", index=False, encoding="utf-8-sig")
-
-# preview
-print("Preview df_all:")
-print(df_all.head(3))
-
-print("Preview df_detail:")
-print(df_detail.head(3))
-
-print("Preview df_detail_log:")
-print(df_detail_log.head(3))
-
-df_all.to_excel("pddikti_all_pt_raw.xlsx", index=False)
-print("df_all exported to pddikti_all_pt_raw.xlsx")
-
-df_detail.to_excel("pddikti_detail_prodi.xlsx", index=False)
-print("df_detail exported to pddikti_detail_prodi.xlsx")
+    if gabungan_list:
+        df_all = pd.concat(gabungan_list, ignore_index=True)
+        df_all.to_csv("pddikti_all_pt_raw.csv", index=False, encoding="utf-8-sig")
+        df_all.to_excel("pddikti_all_pt_raw.xlsx", index=False)
+        print(f"\n✅ BERHASIL: {len(df_all)} data terkumpul.")
