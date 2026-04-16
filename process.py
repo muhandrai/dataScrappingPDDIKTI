@@ -6,7 +6,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Pengaturan Performa
-MAX_WORKERS = 10  # Jumlah thread (halaman yang ditarik sekaligus)
+MAX_WORKERS = 10
 TIMEOUT_SECONDS = 10
 VERBOSE = True
 
