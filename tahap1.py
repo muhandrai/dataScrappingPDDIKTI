@@ -12,6 +12,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 MAX_WORKERS = 10
 TIMEOUT_SECONDS = 10
 VERBOSE = True
+OUTPUT_DIR = "results"
+
+# Pastikan folder output tersedia
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BASE_URL = "https://api-pddikti.kemdiktisaintek.go.id/v2/pt/search/filter"
 
@@ -56,7 +60,7 @@ def safe_filename(text: str) -> str:
 
 def csv_path_for(provinsi: str) -> str:
     """Kembalikan path CSV output untuk satu provinsi."""
-    return f"pddikti_{safe_filename(provinsi)}_raw.csv"
+    return os.path.join(OUTPUT_DIR, f"pddikti_{safe_filename(provinsi)}_raw.csv")
 
 
 def check_api_status(session: requests.Session) -> bool:
@@ -150,8 +154,8 @@ def rebuild_combined_csv(gabungan_list: list[pd.DataFrame]) -> pd.DataFrame | No
     if not gabungan_list:
         return None
     df_all = pd.concat(gabungan_list, ignore_index=True)
-    df_all.to_csv("pddikti_all_pt_raw.csv", index=False, encoding="utf-8-sig")
-    df_all.to_excel("pddikti_all_pt_raw.xlsx", index=False)
+    df_all.to_csv(os.path.join(OUTPUT_DIR, "pddikti_all_pt_raw.csv"), index=False, encoding="utf-8-sig")
+    df_all.to_excel(os.path.join(OUTPUT_DIR, "pddikti_all_pt_raw.xlsx"), index=False)
     return df_all
 
 

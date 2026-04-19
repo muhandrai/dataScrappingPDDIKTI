@@ -11,13 +11,7 @@ dist/
 *.egg-info/
 
 # Scraping / Process Data Files
-*.csv
-*.json
-*.xlsx
-*.log
-
-# Specific output patterns
-pddikti_*_raw.csv
+results/
 
 # IDEs
 .vscode/

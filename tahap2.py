@@ -12,10 +12,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # =========================
 MAX_WORKERS = 10
 TIMEOUT_SECONDS = 15
-FILE_INPUT = "./pddikti_all_pt_raw.csv"
-FILE_OUTPUT_CSV = "./pddikti_detail_prodi.csv"
-FILE_OUTPUT_LOG = "./pddikti_detail_prodi_log.csv"
-FILE_CHECKPOINT = "./pddikti_checkpoint_tahap2.json"
+OUTPUT_DIR = "results"
+
+# Pastikan folder output tersedia
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+FILE_INPUT = os.path.join(OUTPUT_DIR, "pddikti_all_pt_raw.csv")
+FILE_OUTPUT_CSV = os.path.join(OUTPUT_DIR, "pddikti_detail_prodi.csv")
+FILE_OUTPUT_LOG = os.path.join(OUTPUT_DIR, "pddikti_detail_prodi_log.csv")
+FILE_CHECKPOINT = os.path.join(OUTPUT_DIR, "pddikti_checkpoint_tahap2.json")
 
 # Semester yang dicoba secara berurutan (fallback dari yang terbaru)
 DEFAULT_SEMESTERS = ["20251", "20242", "20241"]
@@ -292,7 +297,7 @@ def run_tahap_2() -> bool:
         print("\n📦 Membuat file Excel final...")
         try:
             df_final = pd.read_csv(FILE_OUTPUT_CSV)
-            df_final.to_excel("pddikti_detail_prodi.xlsx", index=False)
+            df_final.to_excel(os.path.join(OUTPUT_DIR, "pddikti_detail_prodi.xlsx"), index=False)
             print(f"✅ Excel final disimpan: {len(df_final)} baris Program Studi.")
         except Exception as e:
             print(f"⚠️  Gagal membuat Excel: {e}")
