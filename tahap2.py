@@ -23,7 +23,7 @@ FILE_OUTPUT_LOG = os.path.join(OUTPUT_DIR, "pddikti_detail_prodi_log.csv")
 FILE_CHECKPOINT = os.path.join(OUTPUT_DIR, "pddikti_checkpoint_tahap2.json")
 
 # Semester yang dicoba secara berurutan (fallback dari yang terbaru)
-DEFAULT_SEMESTERS = ["20251", "20242", "20241"]
+DEFAULT_SEMESTERS = ["20251"]
 
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
